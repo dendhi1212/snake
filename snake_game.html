@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Ular-Ularan (Tidak Bisa Mati) — HTML5</title>
+  <style>
+    :root{--bg:#0b1220;--panel:#0f1724;--accent:#22c55e;--muted:#94a3b8}
+    *{box-sizing:border-box;font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial}
+    body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,#071024,#0b1220);color:#e6eef8}
+    .wrap{width:900px;max-width:95%;display:grid;grid-template-columns:1fr 260px;gap:18px}
+    .game{background:var(--panel);border-radius:12px;padding:14px;box-shadow:0 8px 30px rgba(2,6,23,.7)}
+    canvas{display:block;background:#02101a;border-radius:8px;width:100%;height:auto}
+    .sidebar{background:rgba(255,255,255,.03);border-radius:12px;padding:16px;min-height:320px}
+    h1{font-size:18px;margin:0 0 8px}
+    .info{color:var(--muted);font-size:13px;margin-bottom:12px}
+    .score{font-size:24px;color:var(--accent);font-weight:700}
+    .controls{display:flex;gap:8px;margin-top:12px}
+    button{background:#0b1320;border:1px solid rgba(255,255,255,.04);padding:8px 10px;border-radius:8px;color:inherit;cursor:pointer}
+    .small{font-size:13px;color:var(--muted)}
+    footer{grid-column:1/-1;margin-top:8px;color:var(--muted);font-size:12px;text-align:center}
+    .hint{margin-top:12px;color:var(--muted);font-size:13px}
+    .settings{margin-top:10px;display:flex;flex-direction:column;gap:8px}
+    label{font-size:13px;color:var(--muted)}
+    input[type=range]{width:100%}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="game">
+      <canvas id="c" width="720" height="540"></canvas>
+    </div>
+
+    <div class="sidebar">
+      <h1>Ular-Ularan (tidak bisa mati)</h1>
+      <div class="info">Ular memakan kotak (food). Tidak ada game over: dinding melingkar (wrap) dan menabrak diri sendiri tidak akan membunuh.</div>
+      <div>Skor: <div class="score" id="score">0</div></div>
+
+      <div class="controls">
+        <button id="btn-pause">Pause</button>
+        <button id="btn-reset">Reset</button>
+      </div>
+
+      <div class="settings">
+        <label>Kecepatan (larian) <span id="speedVal">8</span></label>
+        <input id="speed" type="range" min="4" max="18" value="8">
+
+        <label>Ukuran grid <span id="gridVal">20</span></label>
+        <input id="grid" type="range" min="10" max="40" value="20">
+
+        <label><input id="wrap" type="checkbox" checked> Aktifkan wrap (dinding melingkar)</label>
+        <label><input id="passItself" type="checkbox" checked> Ular bisa melewati tubuh sendiri</label>
+      </div>
+
+      <div class="hint">
+        Kontrol: Panah / WASD — Makan kotak untuk tumbuh. Ini versi "tanpa mati": jika Anda menabrak dinding, ular muncul dari sisi lain; menabrak tubuh tidak akan berakhir.
+      </div>
+    </div>
+
+    <footer>Tekan spasi untuk pause/resume. Dibuat cepat — buka file ini di browser untuk main.</footer>
+  </div>
+
+  <script>
+  // Simple Snake (HTML5) — features:
+  // - Eats boxes (food)
+  // - No death: wrap or pass-through options
+  // - Score, speed, grid size controls
+
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+
+  // UI
+  const scoreEl = document.getElementById('score');
+  const btnPause = document.getElementById('btn-pause');
+  const btnReset = document.getElementById('btn-reset');
+  const speedRange = document.getElementById('speed');
+  const speedVal = document.getElementById('speedVal');
+  const gridRange = document.getElementById('grid');
+  const gridVal = document.getElementById('gridVal');
+  const wrapCheckbox = document.getElementById('wrap');
+  const passItselfCheckbox = document.getElementById('passItself');
+
+  let GRID = parseInt(gridRange.value); // cell size in pixels
+  let cols = Math.floor(canvas.width / GRID);
+  let rows = Math.floor(canvas.height / GRID);
+  let speed = parseInt(speedRange.value); // frames per second-ish
+
+  let frameCount = 0;
+  let paused = false;
+
+  speedVal.textContent = speed;
+  gridVal.textContent = GRID;
+
+  function resetState(){
+    GRID = parseInt(gridRange.value);
+    cols = Math.floor(canvas.width / GRID);
+    rows = Math.floor(canvas.height / GRID);
+    speed = parseInt(speedRange.value);
+    speedVal.textContent = speed;
+    gridVal.textContent = GRID;
+
+    snake = [{x: Math.floor(cols/2), y: Math.floor(rows/2)}];
+    dir = {x:1,y:0};
+    pendingDir = null;
+    spawnFood();
+    score = 0;
+  }
+
+  function randCell(){
+    return {x: Math.floor(Math.random()*cols), y: Math.floor(Math.random()*rows)};
+  }
+
+  function spawnFood(){
+    // place on a cell not occupied by snake
+    let candidate;
+    do{
+      candidate = randCell();
+    }while(snake.some(s => s.x===candidate.x && s.y===candidate.y));
+    food = candidate;
+  }
+
+  let snake = [];
+  let dir = {x:1,y:0};
+  let pendingDir = null;
+  let food = {x:5,y:5};
+  let score = 0;
+
+  resetState();
+
+  function update(){
+    if(paused) return;
+    frameCount++;
+    // control speed using frames
+    if(frameCount % Math.max(1, Math.floor(20 - speed)) !== 0) return;
+
+    // apply pending direction
+    if(pendingDir){
+      // prevent direct reversal unless passItselfCheckbox checked (we'll still allow reversal but it will cause overlap)
+      if(!(pendingDir.x === -dir.x && pendingDir.y === -dir.y)){
+        dir = pendingDir;
+      }
+      pendingDir = null;
+    }
+
+    // compute new head
+    let head = {x: snake[0].x + dir.x, y: snake[0].y + dir.y};
+
+    const wrapActive = wrapCheckbox.checked;
+    if(wrapActive){
+      if(head.x < 0) head.x = cols - 1;
+      if(head.x >= cols) head.x = 0;
+      if(head.y < 0) head.y = rows - 1;
+      if(head.y >= rows) head.y = 0;
+    } else {
+      // if not wrap, keep inside bounds (clamp)
+      head.x = Math.max(0, Math.min(cols-1, head.x));
+      head.y = Math.max(0, Math.min(rows-1, head.y));
+    }
+
+    // check self collision
+    const hitsSelf = snake.some(s => s.x === head.x && s.y === head.y);
+    const passSelf = passItselfCheckbox.checked;
+    if(hitsSelf && !passSelf){
+      // behavior when hits self but passSelf false: we allow overlap (no death), but shrink snake by removing tail twice to simulate bump
+      // To keep "no death" promise, we will remove first occurrence to prevent infinite growth overlap
+      let idx = snake.findIndex(s => s.x===head.x && s.y===head.y);
+      if(idx !== -1){
+        // cut the snake up to idx so head teleports forward but we trim the collided section
+        snake = snake.slice(0, idx+1);
+      }
+    }
+
+    // add new head
+    snake.unshift(head);
+
+    // check food
+    if(head.x === food.x && head.y === food.y){
+      score += 1;
+      scoreEl.textContent = score;
+      spawnFood();
+    } else {
+      // normal move: remove tail
+      snake.pop();
+    }
+  }
+
+  function draw(){
+    // clear
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    // draw grid faint
+    const gap = GRID;
+    ctx.save();
+    ctx.globalAlpha = 0.06;
+    for(let x=0;x<=cols;x++){
+      ctx.fillRect(x*gap,0,1,canvas.height);
+    }
+    for(let y=0;y<=rows;y++){
+      ctx.fillRect(0,y*gap,canvas.width,1);
+    }
+    ctx.restore();
+
+    // draw food as a box
+    ctx.fillStyle = '#ffb86b';
+    ctx.fillRect(food.x*GRID + 4, food.y*GRID + 4, GRID - 8, GRID - 8);
+
+    // draw snake body
+    for(let i=snake.length-1;i>=0;i--){
+      const s = snake[i];
+      const px = s.x * GRID;
+      const py = s.y * GRID;
+      // head is brighter
+      if(i === 0){
+        ctx.fillStyle = '#22c55e';
+        ctx.fillRect(px+2, py+2, GRID-4, GRID-4);
+        // eye for direction
+        ctx.fillStyle = '#072018';
+        const ex = px + GRID/2 + dir.x*(GRID/4);
+        const ey = py + GRID/2 + dir.y*(GRID/4);
+        ctx.beginPath(); ctx.arc(ex, ey, Math.max(2, GRID/12), 0, Math.PI*2); ctx.fill();
+      } else {
+        // gradient along body
+        const t = i / Math.max(1, snake.length-1);
+        const g = Math.floor(60 + (1-t)*120);
+        ctx.fillStyle = `rgb(${34 - Math.floor(t*8)},${197 - Math.floor(t*40)},${94 - Math.floor(t*30)})`;
+        ctx.fillRect(px+3, py+3, GRID-6, GRID-6);
+      }
+    }
+
+  }
+
+  function loop(){
+    update();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  requestAnimationFrame(loop);
+
+  // input
+  window.addEventListener('keydown', (e)=>{
+    if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','w','a','s','d','W','A','S','D'].includes(e.key)){
+      let kd = e.key.toLowerCase();
+      let nd;
+      if(kd === 'arrowup' || e.key === 'ArrowUp' || kd === 'w') nd = {x:0,y:-1};
+      if(kd === 'arrowdown' || e.key === 'ArrowDown' || kd === 's') nd = {x:0,y:1};
+      if(kd === 'arrowleft' || e.key === 'ArrowLeft' || kd === 'a') nd = {x:-1,y:0};
+      if(kd === 'arrowright' || e.key === 'ArrowRight' || kd === 'd') nd = {x:1,y:0};
+      if(nd) pendingDir = nd;
+      e.preventDefault();
+    }
+
+    if(e.code === 'Space'){
+      paused = !paused;
+      btnPause.textContent = paused ? 'Resume' : 'Pause';
+      e.preventDefault();
+    }
+  });
+
+  btnPause.addEventListener('click', ()=>{
+    paused = !paused;
+    btnPause.textContent = paused ? 'Resume' : 'Pause';
+  });
+
+  btnReset.addEventListener('click', ()=>{
+    resetState();
+    paused = false;
+    btnPause.textContent = 'Pause';
+    scoreEl.textContent = score;
+  });
+
+  speedRange.addEventListener('input', ()=>{
+    speed = parseInt(speedRange.value);
+    speedVal.textContent = speed;
+  });
+
+  gridRange.addEventListener('input', ()=>{
+    gridVal.textContent = gridRange.value;
+    // when changing grid we must recalc cols/rows and adjust snake coordinates proportionally
+    const oldGrid = GRID;
+    const scale = parseInt(gridRange.value) / oldGrid;
+    GRID = parseInt(gridRange.value);
+    cols = Math.floor(canvas.width / GRID);
+    rows = Math.floor(canvas.height / GRID);
+    // reposition snake to fit new grid
+    snake = snake.map(s => ({x: Math.max(0, Math.min(cols-1, Math.round(s.x*scale))), y: Math.max(0, Math.min(rows-1, Math.round(s.y*scale))) }));
+    spawnFood();
+  });
+
+  // make the game responsive when window resizes
+  function fitCanvas(){
+    const rect = canvas.getBoundingClientRect();
+    // keep canvas internal pixels fixed (we use CSS to scale) — already fixed sizes set in html
+  }
+  window.addEventListener('resize', fitCanvas);
+
+  </script>
+</body>
+</html>
